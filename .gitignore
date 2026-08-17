@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+dist/
+build/
+coverage/
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Docker
+*.log
+
+db-data/
+redis-data/
+
+# Build artifacts
+*.egg-info/
