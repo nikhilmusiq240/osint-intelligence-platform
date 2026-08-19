@@ -1,23 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-
-@dataclass(slots=True)
-class ConnectorResult:
-    connector_name: str
-    query: str
-    entities: list[dict[str, Any]] = field(default_factory=list)
-    evidence: list[dict[str, Any]] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    status: str = "success"
+from app.services.connector_sdk import ConnectorResult
 
 
 class ConnectorProtocol(Protocol):
     name: str
     category: str
     description: str
+    version: str
 
     def execute(self, query: str, **kwargs: Any) -> ConnectorResult: ...
 

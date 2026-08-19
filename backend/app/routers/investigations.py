@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db_session
 from app.models import (
+    ConnectorRun,
     EntityRecord,
     EvidenceRecord,
     Investigation,
@@ -232,6 +233,21 @@ def create_connector_run(
     payload: ConnectorRunCreate,
     session: Annotated[Session, Depends(get_db_session)],
 ) -> Any:
+    investigation = session.get(Investigation, investigation_id)
+    if investigation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Investigation not found",
+        )
+
+    if payload.target_id is not None:
+        target = session.get(InvestigationTarget, payload.target_id)
+        if target is None or target.investigation_id != investigation_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Target not found",
+            )
+
     service = InvestigationService(session)
     return service.create_connector_run(
         investigation_id=investigation_id,
@@ -242,13 +258,57 @@ def create_connector_run(
     )
 
 
+@router.post(
+    "/{investigation_id}/connector-runs/{run_id}/execute",
+    response_model=ConnectorRunRead,
+)
+def execute_connector_run(
+    investigation_id: int,
+    run_id: int,
+    session: Annotated[Session, Depends(get_db_session)],
+) -> ConnectorRun:
+    investigation = session.get(Investigation, investigation_id)
+    if investigation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Investigation not found",
+        )
+
+    run = session.get(ConnectorRun, run_id)
+    if run is None or run.investigation_id != investigation_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Connector run not found",
+        )
+
+    if run.status not in {"queued", "failed"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Connector run cannot be executed from status '{run.status}'",
+        )
+
+    service = InvestigationService(session)
+
+    try:
+        return service.execute_connector_job(
+            investigation_id=investigation_id,
+            target_id=run.target_id,
+            connector_name=run.connector_name,
+            query=run.query,
+            metadata=run.run_metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+
 @router.get("/{investigation_id}/connector-runs", response_model=list[ConnectorRunRead])
 def list_connector_runs(
     investigation_id: int,
     session: Annotated[Session, Depends(get_db_session)],
 ) -> list[Any]:
-    from app.models import ConnectorRun
-
     return (
         session.query(ConnectorRun)
         .filter(ConnectorRun.investigation_id == investigation_id)

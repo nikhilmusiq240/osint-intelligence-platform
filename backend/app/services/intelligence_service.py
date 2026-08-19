@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -206,6 +206,8 @@ class InvestigationService:
         attempts: int | None = None,
         result_summary: dict[str, Any] | None = None,
         error_message: str | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
     ) -> ConnectorRun:
         run = self.session.get(ConnectorRun, run_id)
         if run is None:
@@ -218,6 +220,10 @@ class InvestigationService:
             run.result_summary = result_summary
         if error_message is not None:
             run.error_message = error_message
+        if started_at is not None:
+            run.started_at = started_at
+        if completed_at is not None:
+            run.completed_at = completed_at
         self.session.commit()
         self.session.refresh(run)
         return run
@@ -240,30 +246,111 @@ class InvestigationService:
             query=query,
             metadata=metadata,
         )
-        self.update_connector_run(run.id, status="running", attempts=1)
+
+        started_at = datetime.now(timezone.utc)
+        self.update_connector_run(
+            run.id,
+            status="running",
+            attempts=1,
+            started_at=started_at,
+        )
 
         try:
             connector = registry.get_connector(connector_name)
             result = connector.execute(query=query)
-            self.update_connector_run(
+
+            connector_version = getattr(result, "connector_version", None)
+
+            provenance = self.create_provenance(
+                source_name=result.connector_name,
+                source_type="connector",
+                retrieved_at=datetime.now(timezone.utc),
+                metadata={
+                    "connector_name": result.connector_name,
+                    "connector_version": connector_version,
+                    "connector_run_id": run.id,
+                    "query": result.query,
+                },
+            )
+
+            for item in result.entities:
+                self.create_entity(
+                    investigation_id=investigation_id,
+                    target_id=target_id,
+                    entity_type=item.get("entity_type", "unknown"),
+                    value=str(item.get("value", "")),
+                    normalized_value=item.get("normalized_value"),
+                    confidence=float(item.get("confidence", 0.0)),
+                    attributes=item.get("attributes") or {},
+                    provenance_id=provenance.id,
+                    is_observed=item.get("is_observed", True),
+                )
+
+            for item in result.evidence:
+                self.add_evidence(
+                    investigation_id=investigation_id,
+                    target_id=target_id,
+                    source_name=item.get("source_name", result.connector_name),
+                    source_url=item.get("source_url"),
+                    title=item.get("title"),
+                    content=item.get("content"),
+                    content_type=item.get("content_type", "text"),
+                    provenance_id=provenance.id,
+                    hash_value=item.get("hash_value"),
+                    observed_at=item.get("observed_at"),
+                    retrieved_at=item.get("retrieved_at", datetime.now(timezone.utc)),
+                    connector_name=result.connector_name,
+                    connector_version=connector_version,
+                    raw_source_data=item.get("raw_source_data"),
+                    is_verified=item.get("is_verified", False),
+                    is_immutable=item.get("is_immutable", True),
+                )
+
+            completed_at = datetime.now(timezone.utc)
+            completed = self.update_connector_run(
                 run.id,
                 status="completed",
                 attempts=1,
+                completed_at=completed_at,
                 result_summary={
                     "connector_name": result.connector_name,
+                    "connector_version": connector_version,
                     "query": result.query,
                     "status": result.status,
                     "entity_count": len(result.entities),
                     "evidence_count": len(result.evidence),
                     "warnings": result.warnings,
+                    "provenance_id": provenance.id,
                 },
             )
-            return self.session.get(ConnectorRun, run.id)
+            return completed
+
         except KeyError as exc:
             self.update_connector_run(
-                run.id, status="failed", attempts=1, error_message=str(exc)
+                run.id,
+                status="failed",
+                attempts=1,
+                completed_at=datetime.now(timezone.utc),
+                error_message="Connector is not registered.",
             )
             raise ValueError(str(exc)) from exc
+
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "Connector '%s' failed for run %s",
+                connector_name,
+                run.id,
+            )
+            self.update_connector_run(
+                run.id,
+                status="failed",
+                attempts=1,
+                completed_at=datetime.now(timezone.utc),
+                error_message="Connector execution failed.",
+            )
+            raise ValueError("Connector execution failed.") from exc
 
     def get_graph(self, investigation_id: int) -> dict[str, Any]:
         entities = (

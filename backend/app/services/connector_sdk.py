@@ -20,10 +20,13 @@ class ConnectorResult:
     evidence: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     status: str = "success"
+    connector_version: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class BaseConnector(ABC):
     name: str = "base"
+    version: str = "1.0.0"
     category: str = "generic"
     description: str = "Base connector implementation."
 
@@ -50,4 +53,5 @@ class NullConnector(BaseConnector):
             evidence=[],
             warnings=["No implementation registered for this connector."],
             status="skipped",
+            connector_version=self.version,
         )
